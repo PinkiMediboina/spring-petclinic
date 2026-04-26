@@ -1,0 +1,75 @@
+pipeline {
+  agent any
+
+  environment {
+    ACR_LOGIN_SERVER = 'petclinicacr2024.azurecr.io'
+    IMAGE_NAME       = 'petclinic'
+    IMAGE_TAG        = "${BUILD_NUMBER}"
+  }
+
+  stages {
+
+    stage('Clone Source Code') {
+      steps {
+        git branch: 'main',
+            url: 'https://github.com/YOUR-USERNAME/spring-petclinic'
+      }
+    }
+
+    stage('Build and Test with Maven') {
+      steps {
+        sh 'mvn clean test'
+      }
+    }
+
+    stage('Package JAR') {
+      steps {
+        sh 'mvn package -DskipTests'
+      }
+    }
+
+    stage('SonarQube Analysis') {
+      steps {
+        withSonarQubeEnv('SonarQube') {
+          sh 'mvn sonar:sonar -Dsonar.projectKey=petclinic'
+        }
+      }
+    }
+
+    stage('Build Docker Image') {
+      steps {
+        sh "docker build -t ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG} ."
+      }
+    }
+
+    stage('Push to ACR') {
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: 'acr-credentials',
+          usernameVariable: 'USR',
+          passwordVariable: 'PSW'
+        )]) {
+          sh '''
+            echo $PSW | docker login ${ACR_LOGIN_SERVER} -u $USR --password-stdin
+            docker push ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}
+            docker tag  ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG} \
+                        ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest
+            docker push ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest
+          '''
+        }
+      }
+    }
+
+    stage('Trivy Security Scan') {
+      steps {
+        sh "trivy image --exit-code 0 --severity HIGH,CRITICAL ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}"
+      }
+    }
+
+  }
+
+  post {
+    success { echo 'CI Pipeline SUCCESS - image pushed to ACR' }
+    failure { echo 'CI Pipeline FAILED - check logs above' }
+  }
+}
